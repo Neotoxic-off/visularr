@@ -1,0 +1,9 @@
+.git
+**/bin
+**/obj
+**/node_modules
+**/.next
+**/out
+**/*.tsbuildinfo
+server/tests
+server/fuzz

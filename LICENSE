@@ -1,0 +1,4 @@
+visularr is a derivative of Jellyfin (https://github.com/jellyfin/jellyfin, v10.11.9).
+
+The server in server/ is licensed under the GNU General Public License, version 2 (GPL-2.0);
+the full text is in server/LICENSE. Changes made by visularr to that code are released under the same license.

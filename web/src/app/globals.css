@@ -1,0 +1,237 @@
+@import "tailwindcss";
+
+/* Dark only: posters and artwork read best on a dark canvas. */
+:root {
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-canvas: #000;
+  --color-ink: #ededed;
+  /* Lighter than ink-3 by a visible step, so secondary text and captions read as two levels. */
+  --color-ink-2: #b4b4b4;
+  /* The floor for text: nothing dimmer stays readable over bright backdrops. */
+  --color-ink-3: #8f8f8f;
+  --color-hair: rgb(255 255 255 / 0.1);
+  --color-hair-2: rgb(255 255 255 / 0.06);
+  --color-fill: rgb(255 255 255 / 0.04);
+  --color-fill-2: rgb(255 255 255 / 0.08);
+  --color-fill-3: rgb(255 255 255 / 0.14);
+  --color-ok: #3ecf8e;
+  --color-live: #3291ff;
+  --color-seek: #a78bfa;
+  --color-warn: #f5a623;
+  --color-bad: #ff4d4d;
+  /* Black layers over artwork: sunk wells, modal backdrops, veils behind text. */
+  --color-sunk: rgb(0 0 0 / 0.25);
+  --color-overlay: rgb(0 0 0 / 0.6);
+  --color-veil: rgb(0 0 0 / 0.55);
+
+  /* Five text sizes: caption 11, meta 13, body 15, title 17, display 28+ (page heads use font-display). */
+  --text-caption: 11px;
+  --text-meta: 13px;
+  --text-body: 15px;
+  --text-title: 17px;
+
+  --radius-thumb: 8px;
+  --radius-chip: 10px;
+  --radius-ctl: 14px;
+  --radius-card: 16px;
+  --radius-tile: 24px;
+  --radius-panel: 28px;
+  --radius-pill: 999px;
+
+  --shadow-glass: inset 0 1px 0 rgb(255 255 255 / 0.04), 0 1px 2px rgb(0 0 0 / 0.6);
+  --shadow-pop: 0 0 0 1px rgb(255 255 255 / 0.08), 0 16px 48px -12px rgb(0 0 0 / 0.9);
+
+  /* Generic fallback: Firefox draws <select> popups without the web font. */
+  --font-sans: var(--font-jakarta), ui-sans-serif, system-ui, sans-serif;
+
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --animate-rise: rise 240ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  --animate-fade: fade 300ms ease-out both;
+  --animate-shimmer: shimmer 1.6s linear infinite;
+  --animate-pulse-dot: pulse-dot 1.4s ease-in-out infinite;
+}
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+
+@keyframes pulse-dot {
+  50% { opacity: 0.35; transform: scale(0.8); }
+}
+
+body {
+  background: var(--color-canvas);
+  color: var(--color-ink);
+}
+
+::selection {
+  background: rgb(255 255 255 / 0.3);
+}
+
+/* In the base layer so a utility like focus-visible:outline-none can still override it. */
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--color-ink);
+    outline-offset: 2px;
+  }
+}
+
+/* The only blurred surfaces: chrome, tiles and sheets. Rows and posters inside them use .well. */
+@layer components {
+  .glass,
+  .glass-pop {
+    background: rgb(10 10 10 / 0.96);
+    border: 1px solid var(--color-hair);
+  }
+
+  @supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+    .glass,
+    .glass-pop {
+      background: rgb(10 10 10 / 0.72);
+      -webkit-backdrop-filter: blur(16px) saturate(120%);
+      backdrop-filter: blur(16px) saturate(120%);
+      box-shadow: var(--shadow-glass);
+    }
+
+    .glass-pop {
+      background: rgb(10 10 10 / 0.97);
+      box-shadow: var(--shadow-pop);
+    }
+
+    @media (max-width: 640px) {
+      .glass,
+      .glass-pop {
+        -webkit-backdrop-filter: blur(12px) saturate(120%);
+        backdrop-filter: blur(12px) saturate(120%);
+      }
+    }
+  }
+
+  @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+    .glass,
+    .glass-pop {
+      background: rgb(10 10 10);
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+      border-color: rgb(255 255 255 / 0.3);
+    }
+  }
+
+  .well {
+    background: var(--color-fill);
+    border: 1px solid var(--color-fill-2);
+  }
+
+  .scrim-text {
+    text-shadow: 0 1px 12px rgb(0 0 0 / 0.5);
+  }
+
+  .caption {
+    font-size: var(--text-caption);
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--color-ink-3);
+  }
+}
+
+/* Horizontal rails: scroll by touch or wheel, no visible bar. */
+.rail {
+  scrollbar-width: none;
+  scroll-snap-type: x mandatory;
+}
+.rail::-webkit-scrollbar {
+  display: none;
+}
+.rail > * {
+  scroll-snap-align: start;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    animation-delay: 0ms !important;
+    transition-duration: 1ms !important;
+  }
+}
+
+/* Display text (titles, tile numbers): the UI face, heavier and tighter. */
+@utility font-display {
+  font-family: var(--font-jakarta), ui-sans-serif, system-ui, sans-serif;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+
+/* Bottom-heavy scrim for text laid over card artwork. */
+@utility scrim-b {
+  background: linear-gradient(to top, rgb(0 0 0 / 0.85), rgb(0 0 0 / 0.2) 55%, rgb(0 0 0 / 0.3));
+}
+
+/* Player seek and volume sliders: a thin track that thickens under the pointer, a white thumb. */
+.slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 20px;
+  background: transparent;
+  cursor: pointer;
+}
+.slider::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(to right, #fff var(--fill, 0%), rgb(255 255 255 / 0.25) var(--fill, 0%));
+}
+.slider::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(to right, #fff var(--fill, 0%), rgb(255 255 255 / 0.25) var(--fill, 0%));
+}
+.slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  margin-top: -5px;
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: #fff;
+}
+.slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: 0;
+  border-radius: 999px;
+  background: #fff;
+}
+/* Touch: a 44px hit area around the same thin track, and a thumb a finger can find. */
+@media (pointer: coarse) {
+  .slider {
+    height: 44px;
+  }
+  .slider::-webkit-slider-thumb {
+    margin-top: -8px;
+    width: 20px;
+    height: 20px;
+  }
+  .slider::-moz-range-thumb {
+    width: 20px;
+    height: 20px;
+  }
+}
+
+video::cue {
+  font-family: var(--font-jakarta), ui-sans-serif, system-ui, sans-serif;
+  background: rgb(0 0 0 / 0.6);
+}
