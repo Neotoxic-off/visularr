@@ -5,10 +5,11 @@ import { decode } from "blurhash";
 import { useEffect, useRef, useState } from "react";
 import type { JSX, KeyboardEvent, ReactNode, RefObject } from "react";
 import { episodeCode, itemHref, landscape, playHref, poster, progressOf } from "@/lib/api";
-import type { Art, Item } from "@/lib/api";
+import type { Art, Item, UserItemData } from "@/lib/api";
 import { Icon } from "@/components/icons";
 import type { IconName } from "@/components/icons";
-import { Skeleton } from "@/components/ui";
+import { ItemMenu } from "@/components/ItemActions";
+import { Ratings, Skeleton } from "@/components/ui";
 
 const HASH_SIZE: number = 16;
 
@@ -104,11 +105,21 @@ function subtitle(item: Item): string {
   return item.ProductionYear ? String(item.ProductionYear) : "";
 }
 
+// The card's own copy of its user data, so like and My list from its menu show at once.
+function useCardItem(initial: Item): [Item, (data: UserItemData) => void] {
+  const [data, setData] = useState<UserItemData | undefined>(initial.UserData);
+  return [{ ...initial, UserData: data }, (next: UserItemData) => setData((d: UserItemData | undefined) => ({ ...d, ...next }))];
+}
+
+const cardMenu: string = "absolute top-2 left-2 z-10 grid size-9 cursor-pointer place-items-center rounded-full bg-black/70 text-ink ring-1 ring-white/10 transition hover:bg-black/90 focus-visible:opacity-100 aria-expanded:opacity-100 pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100";
+
 // A portrait card for movies, series and seasons.
-export function PosterCard({ item, className = "", roving }: { item: Item; className?: string; roving?: Roving }): JSX.Element {
+export function PosterCard({ item: initial, className = "", roving }: { item: Item; className?: string; roving?: Roving }): JSX.Element {
+  const [item, setUserData] = useCardItem(initial);
   const title: string = item.Type === "Episode" ? item.SeriesName ?? item.Name : item.Name;
   return (
     <article className={`group relative min-w-0 ${className}`}>
+      {item.Type !== "CollectionFolder" && item.Type !== "UserView" && <ItemMenu item={item} onChange={setUserData} className={cardMenu} />}
       <Link href={itemHref(item)} data-card="" {...roving} className="group/card block rounded-card focus-visible:outline-none">
         <div className={`relative rounded-card ${focusArt}`}>
           <Img art={poster(item)} label={title} sizes="(min-width: 480px) 180px, 140px" className="aspect-[2/3] rounded-card ring-1 ring-white/8" />
@@ -117,17 +128,22 @@ export function PosterCard({ item, className = "", roving }: { item: Item; class
         </div>
         <h3 className="mt-2.5 truncate px-0.5 text-body font-semibold" title={title}>{title}</h3>
       </Link>
-      <p className="truncate px-0.5 text-meta text-ink-3">{subtitle(item) || " "}</p>
+      <p className="flex items-center gap-2 px-0.5 text-meta text-ink-3">
+        <span className="truncate">{subtitle(item) || " "}</span>
+        {item.Type !== "Episode" && <Ratings compact community={item.CommunityRating} critic={item.CriticRating} className="shrink-0 flex-nowrap gap-x-2" />}
+      </p>
     </article>
   );
 }
 
 // A landscape card for continue watching and next up: it plays straight away.
-export function WideCard({ item, className = "", roving }: { item: Item; className?: string; roving?: Roving }): JSX.Element {
+export function WideCard({ item: initial, className = "", roving }: { item: Item; className?: string; roving?: Roving }): JSX.Element {
+  const [item, setUserData] = useCardItem(initial);
   const title: string = item.Type === "Episode" ? item.SeriesName ?? item.Name : item.Name;
   const progress: number = progressOf(item);
   return (
     <article className={`group relative min-w-0 ${className}`}>
+      <ItemMenu item={item} onChange={setUserData} className={cardMenu} />
       <Link href={playHref(item.Id)} aria-label={`Play ${title}${item.Type === "Episode" ? `, ${subtitle(item)}` : ""}`} data-card="" {...roving} className="group/card block rounded-card focus-visible:outline-none">
         <div className={`relative rounded-card ${focusArt}`}>
           <Img art={landscape(item)} icon="tv" sizes="300px" className="aspect-video rounded-card ring-1 ring-white/8" />

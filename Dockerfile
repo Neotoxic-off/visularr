@@ -32,6 +32,22 @@ RUN apt-get update \
     && test "$(gpg --show-keys --with-colons /tmp/jellyfin.asc | awk -F: '$1 == "pub" { getline; print $10 }')" = "$JELLYFIN_KEY_FINGERPRINT" \
     && gpg --dearmor -o /jellyfin.gpg /tmp/jellyfin.asc
 
+# alass (subtitle autosync), the official static release binary, pinned by SHA-256. It has no arm64 release: there the
+# folder stays empty and the server answers autosync with 501.
+FROM --platform=$BUILDPLATFORM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad AS alass
+ARG TARGETARCH
+ARG DEBIAN_FRONTEND=noninteractive
+ARG ALASS_VERSION=2.0.0
+ARG ALASS_SHA256=7bd0b9ae7e035d3ba940eacffb21243614df36231d47f21f0b4ce42001ab7fcd
+RUN mkdir -p /out \
+    && if [ "$TARGETARCH" = "amd64" ]; then \
+        apt-get update \
+        && apt-get install -y --no-install-recommends ca-certificates curl \
+        && curl -fsSL "https://github.com/kaegi/alass/releases/download/v${ALASS_VERSION}/alass-linux64" -o /out/alass-cli \
+        && echo "${ALASS_SHA256}  /out/alass-cli" | sha256sum -c - \
+        && chmod 0755 /out/alass-cli; \
+    fi
+
 FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad
 ARG DEBIAN_FRONTEND=noninteractive
 ARG JELLYFIN_FFMPEG_VERSION=7.1.4-3-trixie
@@ -63,6 +79,7 @@ ENV HEALTHCHECK_URL=http://localhost:8096/health \
 
 COPY --from=server-build /out/server /jellyfin
 COPY --from=web-build /src/web/out /jellyfin/jellyfin-web
+COPY --from=alass /out/ /usr/local/bin/
 
 # Not root: a fixed uid/gid 1000 owning the writable volumes.
 RUN groupadd --gid 1000 visularr \

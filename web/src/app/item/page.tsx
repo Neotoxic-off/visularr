@@ -9,11 +9,13 @@ import * as api from "@/lib/endpoints";
 import type { Art, Item, Person, QueryResult, UserItemData } from "@/lib/api";
 import { useSession } from "@/components/AuthGate";
 import { Icon } from "@/components/icons";
+import { AddToPlaylist, ItemMenu, useUserData } from "@/components/ItemActions";
 import { Img, PosterCard, PosterGrid, PosterSkeleton, Rail } from "@/components/Poster";
+import { UploadSubtitle } from "@/components/UploadSubtitle";
 import { useBackdrop, useShared } from "@/components/Shell";
 import { useToast } from "@/components/Toasts";
 import type { Toast } from "@/components/Toasts";
-import { Alert, Badge, Button, ButtonLink, Empty, IconButton, Modal, Rating, Segmented, Skeleton } from "@/components/ui";
+import { Alert, Badge, Button, ButtonLink, Empty, IconButton, Menu, MenuItem, Modal, Ratings, Segmented, Skeleton } from "@/components/ui";
 
 // Static export has no dynamic segments, so the title comes from ?id=[&season=].
 function Detail(): JSX.Element {
@@ -27,6 +29,7 @@ const youtubeId = (url: string | null | undefined): string | null => /(?:[?&]v=|
 
 function ItemView({ id, season }: { id: string; season: string | null }): JSX.Element {
   const { user, admin } = useSession();
+  const canUploadSubtitles: boolean = admin || !!user.Policy?.EnableSubtitleManagement;
   const { hub } = useShared();
   const toast: (t: Toast) => void = useToast();
   const [item, setItem] = useState<Item | null>(null);
@@ -37,6 +40,7 @@ function ItemView({ id, season }: { id: string; season: string | null }): JSX.El
   const [trailer, setTrailer] = useState<Item | null>(null);
   const [collection, setCollection] = useState<Item | null>(null);
   const [youtube, setYoutube] = useState<string | null>(null);
+  const [dialog, setDialog] = useState<"playlist" | "subtitle" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // The id is in the URL, so nothing waits on the item: show requests just fail quietly for a movie.
@@ -67,20 +71,20 @@ function ItemView({ id, season }: { id: string; season: string | null }): JSX.El
 
   const setUserData = (data: UserItemData): void => setItem((i: Item | null) => i && { ...i, UserData: { ...i.UserData, ...data } });
 
-  async function toggle(kind: "played" | "favorite"): Promise<void> {
+  const toggle: (kind: "liked" | "favorite") => Promise<void> = useUserData(item, setUserData);
+  async function togglePlayed(): Promise<void> {
     if (!item) return;
     try {
-      setUserData(kind === "played"
-        ? await api.setPlayed(item.Id, !item.UserData?.Played)
-        : await api.setFavorite(item.Id, !item.UserData?.IsFavorite));
+      setUserData(await api.setPlayed(item.Id, !item.UserData?.Played));
     } catch (e) {
       toast({ key: `toggle-${item.Id}`, icon: "alert", tone: "bad", title: "Couldn’t save that", message: errorMessage(e) });
     }
   }
 
-  async function togglePlayed(episode: Item): Promise<void> {
-    const data: UserItemData = await api.setPlayed(episode.Id, !episode.UserData?.Played);
-    setEpisodes((list: Item[] | null) => list?.map((e: Item) => (e.Id === episode.Id ? { ...e, UserData: data } : e)) ?? null);
+  const setEpisodeData = (episode: Item, data: UserItemData): void =>
+    setEpisodes((list: Item[] | null) => list?.map((e: Item) => (e.Id === episode.Id ? { ...e, UserData: { ...e.UserData, ...data } } : e)) ?? null);
+  async function toggleEpisodePlayed(episode: Item): Promise<void> {
+    setEpisodeData(episode, await api.setPlayed(episode.Id, !episode.UserData?.Played));
   }
 
   if (error) return <Alert>{error}</Alert>;
@@ -96,9 +100,9 @@ function ItemView({ id, season }: { id: string; season: string | null }): JSX.El
   const facts: ReactNode[] = [
     item.Type === "Episode" ? episodeCode(item) : null,
     item.ProductionYear,
-    item.OfficialRating ? <Badge key="rating">{item.OfficialRating}</Badge> : null,
     series ? (item.ChildCount ? `${item.ChildCount} ${item.ChildCount === 1 ? "season" : "seasons"}` : null) : runtime(item.RunTimeTicks),
   ].filter(Boolean);
+  const video: boolean = item.Type === "Movie" || item.Type === "Episode" || item.Type === "Video";
   const cast: Person[] = (item.People ?? []).filter((p: Person) => p.Type === "Actor").slice(0, 24);
   const directors: Person[] = (item.People ?? []).filter((p: Person) => p.Type === "Director");
   const remote: string | null = localTrailers > 0 ? null : (item.RemoteTrailers ?? []).map((t: { Url?: string | null }) => youtubeId(t.Url)).find(Boolean) ?? null;
@@ -127,8 +131,7 @@ function ItemView({ id, season }: { id: string; season: string | null }): JSX.El
           <h1 tabIndex={-1} className={mark && item.Type !== "Episode" ? "sr-only" : "font-display text-[34px] leading-none outline-none scrim-text sm:text-[48px]"}>{item.Name}</h1>
           <p className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-meta text-ink-2">
             {facts.map((f: ReactNode, i: number) => <span key={i}>{f}</span>)}
-            <Rating value={item.CommunityRating} className="text-meta" />
-            {item.CriticRating != null && <span className="font-semibold tabular-nums">{item.CriticRating}%<span className="sr-only"> critics</span></span>}
+            <Ratings official={item.OfficialRating} community={item.CommunityRating} critic={item.CriticRating} />
           </p>
           <div className="flex flex-wrap items-center gap-2">
             {item.Type !== "BoxSet" && (!series || next) ? (
@@ -139,10 +142,18 @@ function ItemView({ id, season }: { id: string; season: string | null }): JSX.El
             {remote && <Button icon="film" onClick={() => setYoutube(remote)}>Trailer</Button>}
             {item.Type !== "BoxSet" && (
               <IconButton icon="check" label={item.UserData?.Played ? "Mark unwatched" : "Mark watched"} aria-pressed={!!item.UserData?.Played}
-                onClick={() => void toggle("played")} className={item.UserData?.Played ? "!bg-white !text-canvas" : ""} />
+                onClick={() => void togglePlayed()} className={item.UserData?.Played ? "!bg-white !text-canvas" : ""} />
             )}
+            <IconButton icon="thumbsUp" label={item.UserData?.Likes ? "Remove like" : "Like"} aria-pressed={!!item.UserData?.Likes}
+              onClick={() => void toggle("liked")} className={item.UserData?.Likes ? "!bg-white !text-canvas" : ""} />
             <IconButton icon="heart" label={item.UserData?.IsFavorite ? "Remove from My list" : "Add to My list"} aria-pressed={!!item.UserData?.IsFavorite}
               onClick={() => void toggle("favorite")} className={item.UserData?.IsFavorite ? "!text-bad [&_path]:fill-current" : ""} />
+            {item.Type !== "BoxSet" && (
+              <Menu label="More actions">
+                <MenuItem icon="listPlus" onClick={() => setDialog("playlist")}>Add to playlist…</MenuItem>
+                {canUploadSubtitles && video && <MenuItem icon="upload" onClick={() => setDialog("subtitle")}>Add subtitle file…</MenuItem>}
+              </Menu>
+            )}
             {manage && (
               <a href={manage} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-11 items-center gap-2 rounded-pill px-3 text-meta font-medium text-ink-2 hover:bg-fill hover:text-ink">
                 Manage in modularr<Icon name="external" size={14} /><span className="sr-only">(opens in a new tab)</span>
@@ -165,7 +176,7 @@ function ItemView({ id, season }: { id: string; season: string | null }): JSX.El
         </dl>
       </div>
 
-      {series && <Seasons series={item} initial={season} seasons={seasons} episodes={episodes} onToggle={(e: Item) => void togglePlayed(e)} />}
+      {series && <Seasons series={item} initial={season} seasons={seasons} episodes={episodes} onToggle={(e: Item) => void toggleEpisodePlayed(e)} onData={setEpisodeData} />}
       {item.Type === "BoxSet" && <Collection set={item} />}
 
       {cast.length > 0 && (
@@ -184,6 +195,9 @@ function ItemView({ id, season }: { id: string; season: string | null }): JSX.El
       )}
 
       <Rail title="More like this" items={similar} />
+
+      {dialog === "playlist" && <AddToPlaylist ids={[item.Id]} name={item.Name} onClose={() => setDialog(null)} />}
+      {dialog === "subtitle" && <UploadSubtitle item={item} onClose={() => setDialog(null)} />}
 
       {youtube && (
         <Modal title={`${item.Name} · Trailer`} size="lg" onClose={() => setYoutube(null)}>
@@ -213,8 +227,8 @@ function Collection({ set }: { set: Item }): JSX.Element {
   );
 }
 
-function Seasons({ series, initial, seasons, episodes, onToggle }: {
-  series: Item; initial: string | null; seasons: Item[] | null; episodes: Item[] | null; onToggle: (episode: Item) => void;
+function Seasons({ series, initial, seasons, episodes, onToggle, onData }: {
+  series: Item; initial: string | null; seasons: Item[] | null; episodes: Item[] | null; onToggle: (episode: Item) => void; onData: (episode: Item, data: UserItemData) => void;
 }): ReactNode {
   const router: ReturnType<typeof useRouter> = useRouter();
   const selected: string | null = initial ?? seasons?.find((s: Item) => (s.UserData?.UnplayedItemCount ?? 0) > 0)?.Id ?? seasons?.[0]?.Id ?? null;
@@ -232,13 +246,13 @@ function Seasons({ series, initial, seasons, episodes, onToggle }: {
       <ol className="space-y-2">
         {!shown
           ? Array.from({ length: 4 }, (_: unknown, i: number) => <li key={i}><Skeleton className="h-28 rounded-card" /></li>)
-          : shown.map((e: Item) => <Episode key={e.Id} episode={e} onToggle={() => onToggle(e)} />)}
+          : shown.map((e: Item) => <Episode key={e.Id} episode={e} onToggle={() => onToggle(e)} onData={(data: UserItemData) => onData(e, data)} />)}
       </ol>
     </section>
   );
 }
 
-function Episode({ episode, onToggle }: { episode: Item; onToggle: () => void }): JSX.Element {
+function Episode({ episode, onToggle, onData }: { episode: Item; onToggle: () => void; onData: (data: UserItemData) => void }): JSX.Element {
   const progress: number = progressOf(episode);
   const played: boolean = !!episode.UserData?.Played;
   return (
@@ -262,6 +276,7 @@ function Episode({ episode, onToggle }: { episode: Item; onToggle: () => void })
       </div>
       <IconButton variant="ghost" icon="check" size={16} label={played ? `Mark ${episode.Name} unwatched` : `Mark ${episode.Name} watched`} aria-pressed={played}
         onClick={onToggle} className={`self-center ${played ? "!text-ok" : ""}`} />
+      <ItemMenu item={episode} onChange={onData} className="grid size-11 shrink-0 cursor-pointer place-items-center self-center rounded-full text-ink-2 transition hover:bg-fill-2 hover:text-ink" />
     </li>
   );
 }

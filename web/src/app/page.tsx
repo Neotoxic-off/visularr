@@ -9,7 +9,7 @@ import { useSession } from "@/components/AuthGate";
 import { Icon } from "@/components/icons";
 import { Img, Rail } from "@/components/Poster";
 import { useBackdrop, useShared } from "@/components/Shell";
-import { ButtonLink, Rating, Skeleton } from "@/components/ui";
+import { ButtonLink, Ratings, Skeleton } from "@/components/ui";
 
 interface Shelf { view: Item; items: Item[] }
 
@@ -17,6 +17,7 @@ interface Rows {
   resume: Item[];
   nextUp: Item[];
   myList: Item[];
+  liked: Item[];
   latest: Shelf[];
   collections: Shelf[];
 }
@@ -37,11 +38,12 @@ export default function Home(): JSX.Element {
       api.resume(user.Id).catch((): QueryResult<Item> => empty),
       api.nextUp(user.Id).catch((): QueryResult<Item> => empty),
       api.myList(user.Id).catch((): QueryResult<Item> => empty),
+      api.liked(user.Id).catch((): QueryResult<Item> => empty),
       Promise.all(media.map((view: Item) => api.latest(user.Id, view.Id).then((items: Item[]): Shelf => ({ view, items })).catch(() => none(view)))),
       Promise.all(sets.map((view: Item) => api.items({ userId: user.Id, ParentId: view.Id, SortBy: "DateCreated,SortName", SortOrder: "Descending", Limit: 18 })
         .then((r: QueryResult<Item>): Shelf => ({ view, items: r.Items })).catch(() => none(view)))),
-    ]).then(([resume, nextUp, myList, latest, collections]: [QueryResult<Item>, QueryResult<Item>, QueryResult<Item>, Shelf[], Shelf[]]) =>
-      setRows({ resume: resume.Items, nextUp: nextUp.Items, myList: myList.Items, latest, collections }));
+    ]).then(([resume, nextUp, myList, liked, latest, collections]: [QueryResult<Item>, QueryResult<Item>, QueryResult<Item>, QueryResult<Item>, Shelf[], Shelf[]]) =>
+      setRows({ resume: resume.Items, nextUp: nextUp.Items, myList: myList.Items, liked: liked.Items, latest, collections }));
   }, [user.Id, views]);
 
   // The hero: what you were watching, else the newest thing with artwork.
@@ -63,6 +65,7 @@ export default function Home(): JSX.Element {
       <Rail title="Continue watching" wide items={rows?.resume ?? []} loading={!rows} />
       <Rail title="Next up" wide items={rows?.nextUp ?? []} loading={!rows} />
       <Rail title="My list" items={rows?.myList ?? []} />
+      <Rail title="Liked" items={rows?.liked ?? []} />
       {rows?.latest.map(({ view, items }: Shelf) => (
         <Rail key={view.Id} title={`New in ${view.Name}`} href={`/library/?id=${view.Id}`} items={items} />
       ))}
@@ -88,7 +91,6 @@ function Hero({ item: card }: { item: Item }): JSX.Element {
   const title: string = item.Type === "Episode" ? item.SeriesName ?? item.Name : item.Name;
   const meta: ReactNode[] = [
     item.Type === "Episode" ? `${episodeCode(item)} · ${item.Name}` : item.ProductionYear,
-    item.OfficialRating,
     runtime(item.RunTimeTicks),
   ].filter(Boolean);
   return (
@@ -103,7 +105,7 @@ function Hero({ item: card }: { item: Item }): JSX.Element {
         ) : <h2 className="font-display text-[34px] leading-none scrim-text sm:text-[48px]">{title}</h2>}
         <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-meta text-ink-2">
           {meta.map((m: ReactNode, i: number) => <span key={i}>{m}</span>)}
-          <Rating value={item.CommunityRating} className="text-meta" />
+          <Ratings official={item.OfficialRating} community={item.CommunityRating} critic={item.CriticRating} />
         </p>
         {item.Overview && <p className="line-clamp-2 max-w-xl text-body text-ink-2 scrim-text sm:line-clamp-3">{item.Overview}</p>}
         <div className="mt-1 flex flex-wrap gap-2">

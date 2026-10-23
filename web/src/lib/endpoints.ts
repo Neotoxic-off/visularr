@@ -2,7 +2,7 @@
 import { del, get, post, qs, request } from "@/lib/api";
 import type {
   ApiKey, AuthenticationResult, Country, Culture, FileSystemEntry, Item, Managed, MediaSegment, PlaybackInfoResponse, PlaybackReport,
-  PlaybackRequest, PublicSystemInfo, QueryResult, Query, QuickConnectResult, SessionInfo, StartupConfiguration, SystemInfo, UserDto, UserItemData,
+  PlaybackRequest, Playlist, PlaylistShare, PublicSystemInfo, QueryResult, Query, QuickConnectResult, SessionInfo, StartupConfiguration, SystemInfo, UserDto, UserItemData,
   VirtualFolder,
 } from "@/lib/api";
 
@@ -56,6 +56,8 @@ export const latest = (userId: string, parentId: string): Promise<Item[]> =>
   get<Item[]>(`/Items/Latest${qs({ userId, parentId, Limit: 18, ...CARD })}`);
 export const myList = (userId: string): Promise<QueryResult<Item>> =>
   items({ userId, Filters: "IsFavorite", Recursive: true, IncludeItemTypes: "Movie,Series", SortBy: "DateCreated,SortName", SortOrder: "Descending", Limit: 24 });
+export const liked = (userId: string): Promise<QueryResult<Item>> =>
+  items({ userId, Filters: "Likes", Recursive: true, IncludeItemTypes: "Movie,Series,Episode", SortBy: "DatePlayed,DateCreated", SortOrder: "Descending", Limit: 24 });
 export const recentlyPlayed = (userId: string): Promise<QueryResult<Item>> =>
   items({ userId, Filters: "IsPlayed", Recursive: true, IncludeItemTypes: "Movie,Episode", SortBy: "DatePlayed", SortOrder: "Descending", Limit: 8 });
 export const localTrailers = (userId: string, id: string): Promise<Item[]> => get<Item[]>(`/Items/${encodeURIComponent(id)}/LocalTrailers${qs({ userId })}`);
@@ -93,6 +95,39 @@ export const setPlayed = (id: string, played: boolean): Promise<UserItemData> =>
   request<UserItemData>(played ? "POST" : "DELETE", `/UserPlayedItems/${encodeURIComponent(id)}`);
 export const setFavorite = (id: string, favorite: boolean): Promise<UserItemData> =>
   request<UserItemData>(favorite ? "POST" : "DELETE", `/UserFavoriteItems/${encodeURIComponent(id)}`);
+
+// Thumbs up, separate from favourites: UserData.Likes. Unliking clears the rating rather than giving a thumbs down.
+export const setLiked = (id: string, liked: boolean): Promise<UserItemData> =>
+  request<UserItemData>(liked ? "POST" : "DELETE", `/UserItems/${encodeURIComponent(id)}/Rating${liked ? qs({ likes: true }) : ""}`);
+
+// Playlists
+const pid = (id: string): string => encodeURIComponent(id);
+export const playlists = (userId: string): Promise<QueryResult<Item>> =>
+  items({ userId, IncludeItemTypes: "Playlist", Recursive: true, SortBy: "SortName", SortOrder: "Ascending", Fields: "PrimaryImageAspectRatio,ImageBlurHashes,ChildCount" });
+export const playlist = (id: string): Promise<Playlist> => get<Playlist>(`/Playlists/${pid(id)}`);
+export const playlistItems = (userId: string, id: string): Promise<QueryResult<Item>> =>
+  get<QueryResult<Item>>(`/Playlists/${pid(id)}/Items${qs({ userId, Fields: "PrimaryImageAspectRatio,ImageBlurHashes", EnableImageTypes: IMAGE_TYPES, ImageTypeLimit: 1 })}`);
+export const createPlaylist = (userId: string, name: string, ids: string[]): Promise<{ Id: string }> =>
+  post<{ Id: string }>("/Playlists", { Name: name, Ids: ids, UserId: userId, IsPublic: false });
+export const addToPlaylist = (userId: string, id: string, ids: string[]): Promise<void> => post(`/Playlists/${pid(id)}/Items${qs({ ids, userId })}`);
+export const updatePlaylist = (id: string, patch: { Name?: string; IsPublic?: boolean }): Promise<void> => post(`/Playlists/${pid(id)}`, patch);
+// The server moves entries by the item id they point at.
+export const movePlaylistItem = (id: string, itemId: string, index: number): Promise<void> => post(`/Playlists/${pid(id)}/Items/${pid(itemId)}/Move/${index}`);
+export const removeFromPlaylist = (id: string, entryIds: string[]): Promise<void> => del(`/Playlists/${pid(id)}/Items${qs({ entryIds })}`);
+export const deletePlaylist = (id: string): Promise<void> => del(`/Items/${pid(id)}`);
+// Owner only: who it is shared with.
+export const playlistUsers = (id: string): Promise<PlaylistShare[]> => get<PlaylistShare[]>(`/Playlists/${pid(id)}/Users`);
+export const playlistAccess = (id: string, userId: string): Promise<PlaylistShare> => get<PlaylistShare>(`/Playlists/${pid(id)}/Users/${pid(userId)}`);
+export const sharePlaylist = (id: string, userId: string, canEdit: boolean): Promise<void> => post(`/Playlists/${pid(id)}/Users/${pid(userId)}`, { CanEdit: canEdit });
+export const unsharePlaylist = (id: string, userId: string): Promise<void> => del(`/Playlists/${pid(id)}/Users/${pid(userId)}`);
+// Every user for admins; the ones shown on the sign-in screen for everyone else.
+export const users = (admin: boolean): Promise<UserDto[]> => get<UserDto[]>(admin ? "/Users" : "/Users/Public");
+
+// Subtitles
+export interface SubtitleUpload { Language: string; Format: string; IsForced: boolean; IsHearingImpaired: boolean; Data: string }
+export const uploadSubtitle = (id: string, body: SubtitleUpload): Promise<void> => post(`/Videos/${encodeURIComponent(id)}/Subtitles`, body);
+export const syncSubtitle = (id: string, mediaSourceId: string, streamIndex: number): Promise<{ StreamIndex?: number | null }> =>
+  post<{ StreamIndex?: number | null }>(`/Visularr/Subtitles/${encodeURIComponent(id)}/Sync`, { MediaSourceId: mediaSourceId, StreamIndex: streamIndex });
 
 // Playback
 export const playbackInfo = (id: string, body: PlaybackRequest): Promise<PlaybackInfoResponse> => post<PlaybackInfoResponse>(`/Items/${encodeURIComponent(id)}/PlaybackInfo`, body);

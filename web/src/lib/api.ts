@@ -4,6 +4,7 @@
 
 export interface UserPolicy {
   IsAdministrator: boolean;
+  EnableSubtitleManagement?: boolean;
 }
 
 export interface UserDto {
@@ -38,6 +39,8 @@ export interface UserItemData {
   PlaybackPositionTicks: number;
   PlayCount: number;
   IsFavorite: boolean;
+  // Thumbs up (true), down (false) or neither (null).
+  Likes?: boolean | null;
   Played: boolean;
   PlayedPercentage?: number | null;
   UnplayedItemCount?: number | null;
@@ -67,6 +70,7 @@ export interface MediaStream {
   Title?: string | null;
   IsDefault: boolean;
   IsExternal: boolean;
+  IsTextSubtitleStream?: boolean;
   DeliveryMethod?: DeliveryMethod | null;
   DeliveryUrl?: string | null;
 }
@@ -117,6 +121,9 @@ export interface Item {
   IndexNumber?: number | null;
   ParentIndexNumber?: number | null;
   UserData?: UserItemData;
+  // Set on playlist entries: the entry, as opposed to the item it points at.
+  PlaylistItemId?: string | null;
+  MediaType?: string | null;
   People?: Person[];
   MediaSources?: MediaSource[];
   ProviderIds?: Record<string, string | null>;
@@ -195,7 +202,11 @@ export interface Culture {
   DisplayName: string;
   Name: string;
   TwoLetterISOLanguageName: string;
+  ThreeLetterISOLanguageName?: string | null;
 }
+
+export interface PlaylistShare { UserId: string; CanEdit: boolean }
+export interface Playlist { OpenAccess: boolean; Shares: PlaylistShare[]; ItemIds: string[] }
 
 export interface Country {
   DisplayName: string;
@@ -422,11 +433,13 @@ export const TICKS_PER_SECOND: number = 10_000_000;
 
 export function itemHref(item: Item): string {
   if (item.Type === "CollectionFolder" || item.Type === "UserView") return `/library/?id=${item.Id}`;
+  if (item.Type === "Playlist") return `/playlists/?id=${item.Id}`;
   if (item.Type === "Season" && item.SeriesId) return `/item/?id=${item.SeriesId}&season=${item.Id}`;
   return `/item/?id=${item.Id}`;
 }
 
-export const playHref = (id: string): string => `/play/?id=${id}`;
+// list: a playlist to play through, in order.
+export const playHref = (id: string, list?: string | null): string => `/play/?id=${id}${list ? `&list=${list}` : ""}`;
 
 export function episodeCode(item: Item): string {
   if (item.ParentIndexNumber == null || item.IndexNumber == null) return "";

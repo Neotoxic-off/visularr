@@ -111,6 +111,7 @@ function Frame({ children }: { children: ReactNode }): JSX.Element {
   const links: NavLink[] = [
     { href: "/", label: "Home", icon: "home" },
     ...views.map((v: Item): NavLink => ({ href: `/library/?id=${v.Id}`, label: v.Name, icon: viewIcon(v) })),
+    { href: "/playlists/", label: "Playlists", icon: "list" },
   ];
 
   return (
@@ -204,6 +205,7 @@ function UserMenu(): JSX.Element {
         <p className="text-meta text-ink-3">{admin ? "Administrator" : "Member"}</p>
       </div>
       <MenuItem icon="user" href="/settings/#account">Account</MenuItem>
+      <MenuItem icon="list" href="/playlists/">Playlists</MenuItem>
       {hub?.url && (
         // The other apps, through linkarr: it signs the user in and knows where each one lives.
         <div role="group" aria-label="Apps" className="my-1 border-y border-hair-2 py-1">

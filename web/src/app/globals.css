@@ -235,3 +235,10 @@ video::cue {
   font-family: var(--font-jakarta), ui-sans-serif, system-ui, sans-serif;
   background: rgb(0 0 0 / 0.6);
 }
+
+/* Player subtitles: size and background come from the subtitle settings, as variables on the <video>. */
+video.player-video::cue {
+  font-size: var(--cue-size, 100%);
+  background: var(--cue-bg, rgb(0 0 0 / 0.75));
+  text-shadow: var(--cue-shadow, none);
+}

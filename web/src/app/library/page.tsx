@@ -28,6 +28,8 @@ const sortQuery: Record<Sort, { SortBy: string; SortOrder: string }> = {
 };
 
 const PAGE_SIZE: number = 60;
+// Minimum community rating (out of 10).
+const RATED: readonly string[] = ["5", "6", "7", "8", "9"];
 
 const itemTypes = (collection: string | null | undefined): string =>
   collection === "movies" ? "Movie" : collection === "tvshows" ? "Series" : collection === "music" ? "MusicAlbum" : collection === "boxsets" ? "BoxSet" : "Movie,Series,Video";
@@ -66,7 +68,9 @@ function Grid({ view }: { view: Item }): JSX.Element {
   const genre: string = search.get("genre") ?? "";
   const unwatched: boolean = search.get("unwatched") === "1";
   const mine: boolean = search.get("mine") === "1";
-  const key: string = `visularr.library:${view.Id}|${sort}|${genre}|${unwatched ? 1 : 0}|${mine ? 1 : 0}`;
+  const liked: boolean = search.get("liked") === "1";
+  const rated: string = RATED.find((r: string) => r === search.get("rated")) ?? "";
+  const key: string = `visularr.library:${view.Id}|${sort}|${genre}|${unwatched ? 1 : 0}|${mine ? 1 : 0}|${liked ? 1 : 0}|${rated}`;
 
   const [restored] = useState<Cached | null>(() => readCache<Cached>(key));
   // The key whose pages came from the cache; cleared once the user changes a filter.
@@ -101,7 +105,8 @@ function Grid({ view }: { view: Item }): JSX.Element {
     try {
       const page: QueryResult<Item> = await api.items({
         userId: user.Id, ParentId: view.Id, Recursive: true, IncludeItemTypes: itemTypes(view.CollectionType),
-        ...sortQuery[sort], Genres: genre || undefined, Filters: [unwatched ? "IsUnplayed" : "", mine ? "IsFavorite" : ""].filter(Boolean).join(","),
+        ...sortQuery[sort], Genres: genre || undefined, Filters: [unwatched ? "IsUnplayed" : "", mine ? "IsFavorite" : "", liked ? "Likes" : ""].filter(Boolean).join(","),
+        MinCommunityRating: rated || undefined,
         StartIndex: start, Limit: PAGE_SIZE, EnableTotalRecordCount: true,
       });
       if (ticket !== generation.current) return;
@@ -113,7 +118,7 @@ function Grid({ view }: { view: Item }): JSX.Element {
     } finally {
       if (ticket === generation.current) setLoading(false);
     }
-  }, [user.Id, view.Id, view.CollectionType, sort, genre, unwatched, mine]);
+  }, [user.Id, view.Id, view.CollectionType, sort, genre, unwatched, mine, liked, rated]);
 
   useEffect(() => {
     generation.current += 1;
@@ -152,7 +157,7 @@ function Grid({ view }: { view: Item }): JSX.Element {
     return () => observer.disconnect();
   }, [more, loading, count, load]);
 
-  const filtered: boolean = !!genre || unwatched || mine;
+  const filtered: boolean = !!genre || unwatched || mine || liked || !!rated;
 
   return (
     <>
@@ -165,8 +170,13 @@ function Grid({ view }: { view: Item }): JSX.Element {
             {genres.map((g: string) => <option key={g} value={g}>{g}</option>)}
           </Select>
         )}
+        <Select aria-label="Minimum rating" value={rated} onChange={(e: { target: { value: string } }) => update({ rated: e.target.value || null })} className="w-36">
+          <option value="">Any rating</option>
+          {RATED.map((r: string) => <option key={r} value={r}>{`Rated ${r}+`}</option>)}
+        </Select>
         <Chip selected={unwatched} onClick={() => update({ unwatched: unwatched ? null : "1" })}>Unwatched</Chip>
         <Chip selected={mine} onClick={() => update({ mine: mine ? null : "1" })}>My list</Chip>
+        <Chip selected={liked} onClick={() => update({ liked: liked ? null : "1" })}>Liked</Chip>
       </div>
       {error && <div className="mb-4"><Alert>{error}</Alert></div>}
       {items && items.length === 0 ? (

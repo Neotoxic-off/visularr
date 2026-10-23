@@ -286,6 +286,29 @@ export function Rating({ value, className = "" }: { value: number | null | undef
   );
 }
 
+// Every rating a title carries: the official age rating, the community score (TMDb or IMDb, out of 10) and the critics'
+// Rotten Tomatoes score, fresh from 60%. Compact (cards) drops the age rating and the fresh/rotten word.
+export function Ratings({ official, community, critic, compact = false, className = "" }: {
+  official?: string | null; community?: number | null; critic?: number | null; compact?: boolean; className?: string;
+}): ReactNode {
+  const fresh: boolean = critic != null && critic >= 60;
+  if (!official && !community && critic == null) return null;
+  return (
+    <span className={`inline-flex flex-wrap items-center gap-x-3 gap-y-1 ${className}`}>
+      {official && !compact && <Badge>{official}<span className="sr-only"> rated</span></Badge>}
+      <span title="Community rating (TMDb / IMDb)"><Rating value={community} /></span>
+      {critic != null && (
+        <span title={`Rotten Tomatoes: ${critic}%, ${fresh ? "fresh" : "rotten"}`} className={`inline-flex items-center gap-1 font-semibold tabular-nums ${fresh ? "text-ok" : "text-bad"}`}>
+          <svg viewBox="0 0 24 24" width={14} height={14} aria-hidden="true"><circle cx="12" cy="13" r="8" fill="currentColor" /><path d="M9 4.5 12 6l3-1.5" stroke="currentColor" strokeWidth={2} fill="none" strokeLinecap="round" /></svg>
+          {critic}%
+          <span className={compact ? "sr-only" : "font-medium text-ink-3"}>{fresh ? "Fresh" : "Rotten"}</span>
+          <span className="sr-only"> on Rotten Tomatoes</span>
+        </span>
+      )}
+    </span>
+  );
+}
+
 // Width moves smoothly, but assistive tech hears 10% steps only.
 export function Progress({ value, label = "Progress", className = "" }: { value: number; label?: string; className?: string }): JSX.Element {
   const step: number = Math.floor(Math.min(Math.max(value, 0), 1) * 10) * 10;

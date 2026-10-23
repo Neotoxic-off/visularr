@@ -5,14 +5,16 @@ import type { ErrorData } from "hls.js";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { JSX, ReactNode, RefObject } from "react";
-import { authHeader, clock, episodeCode, errorMessage, landscape, playHref, poster, qs, reportStopped, session, TICKS_PER_SECOND, url } from "@/lib/api";
+import { ApiError, authHeader, clock, episodeCode, errorMessage, landscape, playHref, poster, qs, reportStopped, session, TICKS_PER_SECOND, url } from "@/lib/api";
 import * as api from "@/lib/endpoints";
-import type { Art, Item, MediaSegment, MediaSource, MediaStream, PlaybackInfoResponse, PlaybackReport, QueryResult } from "@/lib/api";
+import type { Art, Item, MediaSegment, MediaSource, MediaStream, PlaybackInfoResponse, PlaybackReport, QueryResult, UserItemData } from "@/lib/api";
 import { deviceProfile } from "@/lib/profile";
+import { loadQueue, saveQueue } from "@/lib/queue";
 import { useSession } from "@/components/AuthGate";
 import { Icon } from "@/components/icons";
 import type { IconName } from "@/components/icons";
-import { Alert, Button, Spinner } from "@/components/ui";
+import { useUserData } from "@/components/ItemActions";
+import { Alert, Button, Segmented, Spinner } from "@/components/ui";
 
 const PROGRESS_EVERY_MS: number = 10_000;
 const HIDE_CONTROLS_MS: number = 3000;
@@ -28,6 +30,18 @@ type Timer = ReturnType<typeof setTimeout> | undefined;
 interface TrackMemory { audio?: string; subtitle?: string }
 interface SkipTarget { label: string; to: number }
 interface Nudge { side: -1 | 1; at: number }
+type CueSize = "s" | "m" | "l" | "xl";
+type CueBackground = "none" | "shadow" | "box";
+interface CueStyle { size: CueSize; background: CueBackground }
+interface SyncState { running: boolean; message: string; failed?: boolean }
+
+const CUE_SIZES: Record<CueSize, string> = { s: "80%", m: "100%", l: "130%", xl: "160%" };
+const CUE_BACKGROUNDS: Record<CueBackground, { background: string; shadow: string }> = {
+  none: { background: "transparent", shadow: "none" },
+  shadow: { background: "transparent", shadow: "0 0 4px #000, 0 0 2px #000, 1px 1px 2px #000" },
+  box: { background: "rgb(0 0 0 / 0.75)", shadow: "none" },
+};
+const OFFSET_STEPS: readonly number[] = [-1, -0.1, 0.1, 1];
 
 const SHORTCUTS: [keys: string, action: string][] = [
   ["Space / K", "Play or pause"], ["← / →", "Back or forward 10 seconds"], ["↑ / ↓", "Volume"], ["0–9", "Jump to 0–90%"],
@@ -78,8 +92,31 @@ function rememberedTracks(current: Item): [audio: number | null, subtitle: numbe
   return [find("Audio", memory.audio), memory.subtitle === "off" ? -1 : find("Subtitle", memory.subtitle)];
 }
 
+// Subtitle timing per title and the subtitle look, kept across sessions in this browser.
+const offsetKey = (itemId: string): string => `visularr.subtitleOffset.${itemId}`;
+function readOffset(itemId: string): number {
+  try { return Number(localStorage.getItem(offsetKey(itemId))) || 0; } catch { return 0; }
+}
+function writeOffset(itemId: string, seconds: number): void {
+  try {
+    if (seconds === 0) localStorage.removeItem(offsetKey(itemId));
+    else localStorage.setItem(offsetKey(itemId), String(seconds));
+  } catch { /* storage blocked: the offset lasts this session */ }
+}
+const STYLE_KEY: string = "visularr.subtitleStyle";
+function readCueStyle(): CueStyle {
+  try {
+    const saved: Partial<CueStyle> = JSON.parse(localStorage.getItem(STYLE_KEY) ?? "{}") as Partial<CueStyle>;
+    return { size: saved.size && saved.size in CUE_SIZES ? saved.size : "m", background: saved.background && saved.background in CUE_BACKGROUNDS ? saved.background : "box" };
+  } catch { return { size: "m", background: "box" }; }
+}
+function writeCueStyle(style: CueStyle): void {
+  try { localStorage.setItem(STYLE_KEY, JSON.stringify(style)); } catch { /* storage blocked */ }
+}
+
 // Full-screen playback: direct play when the browser can, the server's HLS remux or transcode otherwise.
-export function Player({ id, start = null }: { id: string; start?: number | null }): JSX.Element {
+// With list (a playlist id), next and previous walk the playlist's play order.
+export function Player({ id, start = null, list = null }: { id: string; start?: number | null; list?: string | null }): JSX.Element {
   const router: Router = useRouter();
   const { user } = useSession();
   const root: RefObject<HTMLDivElement | null> = useRef<HTMLDivElement>(null);
@@ -97,6 +134,9 @@ export function Player({ id, start = null }: { id: string; start?: number | null
   const touch: RefObject<boolean> = useRef(false);
   const lastTap: RefObject<number> = useRef(0);
   const tapTimer: RefObject<Timer> = useRef<Timer>(undefined);
+  const trackEl: RefObject<HTMLTrackElement | null> = useRef<HTMLTrackElement>(null);
+  // Each cue's own times, so offsets are applied from the original rather than stacked.
+  const cueTimes: RefObject<WeakMap<TextTrackCue, [number, number]>> = useRef(new WeakMap<TextTrackCue, [number, number]>());
 
   const [item, setItem] = useState<Item | null>(null);
   const [source, setSource] = useState<MediaSource | null>(null);
@@ -117,6 +157,11 @@ export function Player({ id, start = null }: { id: string; start?: number | null
   const [segments, setSegments] = useState<MediaSegment[]>([]);
   const [next, setNext] = useState<Item | null>(null);
   const [upNextDismissed, setUpNextDismissed] = useState(false);
+  const [previous, setPrevious] = useState<string | null>(null);
+  const [ended, setEnded] = useState(false);
+  const [offset, setOffset] = useState<number>(() => readOffset(id));
+  const [cueStyle, setCueStyle] = useState<CueStyle>(readCueStyle);
+  const [sync, setSync] = useState<SyncState | null>(null);
 
   const position = (): number => (video.current ? Math.round(video.current.currentTime * TICKS_PER_SECOND) : lastTicks.current);
 
@@ -206,7 +251,23 @@ export function Player({ id, start = null }: { id: string; start?: number | null
       const [audioIndex, subtitleIndex] = rememberedTracks(current);
       void load(current, start !== null ? Math.round(start * TICKS_PER_SECOND) : resume, audioIndex, subtitleIndex);
       api.segments(current.Id).then((r: QueryResult<MediaSegment>) => live && setSegments(r.Items)).catch((): void => undefined);
-      if (current.Type === "Episode" && current.SeriesId) {
+      if (list) {
+        const walk = (order: string[]): void => {
+          const at: number = order.indexOf(current.Id);
+          setPrevious(order[at - 1] ?? null);
+          const following: string | undefined = order[at + 1];
+          if (following) api.item(user.Id, following).then((n: Item) => live && setNext(n)).catch((): void => undefined);
+        };
+        const saved: string[] | null = loadQueue(list);
+        if (saved?.includes(current.Id)) walk(saved);
+        else {
+          api.playlistItems(user.Id, list).then((r: QueryResult<Item>) => {
+            const order: string[] = r.Items.map((e: Item) => e.Id);
+            saveQueue(list, order);
+            if (live) walk(order);
+          }).catch((): void => undefined);
+        }
+      } else if (current.Type === "Episode" && current.SeriesId) {
         api.episodes(user.Id, current.SeriesId, undefined, current.Id, 2)
           .then((r: QueryResult<Item>) => live && setNext(r.Items.find((e: Item) => e.Id !== current.Id) ?? null))
           .catch((): void => undefined);
@@ -224,7 +285,7 @@ export function Player({ id, start = null }: { id: string; start?: number | null
       stop();
       player.current?.destroy();
     };
-  }, [id, start, user.Id, load]);
+  }, [id, start, list, user.Id, load]);
 
   // Progress every 10 s while a session runs.
   useEffect(() => {
@@ -280,8 +341,42 @@ export function Player({ id, start = null }: { id: string; start?: number | null
   }, [router, item, id]);
 
   const playNext: () => void = useCallback((): void => {
-    if (next) router.replace(playHref(next.Id));
-  }, [router, next]);
+    if (next) router.replace(playHref(next.Id, list));
+  }, [router, next, list]);
+
+  const playPrevious: () => void = useCallback((): void => {
+    if (previous) router.replace(playHref(previous, list));
+  }, [router, previous, list]);
+
+  const setUserData = (data: UserItemData): void => setItem((i: Item | null) => i && { ...i, UserData: { ...i.UserData, ...data } });
+  const toggleUserData: (kind: "liked" | "favorite") => Promise<void> = useUserData(item, setUserData);
+
+  // Offsets move every cue of the shown text track; the originals stay in cueTimes.
+  const applyOffset: () => void = useCallback((): void => {
+    const cues: TextTrackCueList | null | undefined = trackEl.current?.track.cues;
+    if (!cues) return;
+    for (const cue of Array.from(cues)) {
+      let base: [number, number] | undefined = cueTimes.current.get(cue);
+      if (!base) {
+        base = [cue.startTime, cue.endTime];
+        cueTimes.current.set(cue, base);
+      }
+      cue.startTime = Math.max(0, base[0] + offset);
+      cue.endTime = Math.max(0, base[1] + offset);
+    }
+  }, [offset]);
+
+  const shiftOffset = (delta: number | null): void => {
+    const value: number = delta === null ? 0 : Math.round((offset + delta) * 10) / 10;
+    setOffset(value);
+    writeOffset(id, value);
+  };
+
+  const changeCueStyle = (patch: Partial<CueStyle>): void => {
+    const value: CueStyle = { ...cueStyle, ...patch };
+    setCueStyle(value);
+    writeCueStyle(value);
+  };
 
   useEffect(() => {
     const change = (): void => setFullscreen(!!document.fullscreenElement);
@@ -293,6 +388,9 @@ export function Player({ id, start = null }: { id: string; start?: number | null
   const audioStreams: MediaStream[] = streams.filter((s: MediaStream) => s.Type === "Audio");
   const subtitleStreams: MediaStream[] = streams.filter((s: MediaStream) => s.Type === "Subtitle");
   const textTrack: MediaStream | undefined = subtitleStreams.find((s: MediaStream) => s.Index === subtitle && s.DeliveryMethod === "External" && s.DeliveryUrl);
+  const trackKey: string | null = textTrack ? `${source?.Id}-${textTrack.Index}` : null;
+  // Autosync aligns text subtitles only; picture ones (PGS, VobSub) have no text to align.
+  const syncable: boolean = subtitleStreams.some((s: MediaStream) => s.Index === subtitle && s.IsTextSubtitleStream !== false && s.DeliveryMethod !== "Encode");
   const hasTracks: boolean = audioStreams.length > 1 || subtitleStreams.length > 0;
 
   const within = (s: MediaSegment): boolean => time >= s.StartTicks / TICKS_PER_SECOND && time < s.EndTicks / TICKS_PER_SECOND - 1;
@@ -307,10 +405,19 @@ export function Player({ id, start = null }: { id: string; start?: number | null
   const countdown: number = Math.max(0, Math.ceil(UP_NEXT_SECONDS - (time - nextFrom)));
   const title: string = item ? (item.Type === "Episode" ? item.SeriesName ?? item.Name : item.Name) : "";
   const subtitleLine: string = item?.Type === "Episode" ? `${episodeCode(item)} · ${item.Name}` : item?.ProductionYear ? String(item.ProductionYear) : "";
-  const visible: boolean = chrome || paused || tracks || help || !!error;
+  const visible: boolean = chrome || paused || tracks || help || ended || !!error;
+  const nextLabel: string = next ? (next.Type === "Episode" ? `${episodeCode(next)} · ${next.Name}` : next.Name) : "";
   const skipLabel: string | null = skip?.label ?? null;
   const skipTo: number | null = skip?.to ?? null;
   const pipEnabled: boolean = typeof document !== "undefined" && document.pictureInPictureEnabled;
+
+  // The offset follows the track: applied when its cues load and whenever it changes.
+  useEffect(() => {
+    applyOffset();
+    const el: HTMLTrackElement | null = trackEl.current;
+    el?.addEventListener("load", applyOffset);
+    return () => el?.removeEventListener("load", applyOffset);
+  }, [applyOffset, trackKey]);
 
   // Up next plays by itself when its countdown runs out.
   useEffect(() => {
@@ -379,6 +486,7 @@ export function Player({ id, start = null }: { id: string; start?: number | null
       ["seekforward", (d: MediaSessionActionDetails) => seek(now() + (d.seekOffset ?? SKIP_SECONDS))],
       ["seekto", (d: MediaSessionActionDetails) => { if (d.seekTime !== undefined) seek(d.seekTime); }],
       ["nexttrack", next ? playNext : null],
+      ["previoustrack", previous ? playPrevious : null],
     ];
     for (const [action, handler] of handlers) {
       try { media.setActionHandler(action, handler); } catch { /* the browser does not know this action */ }
@@ -389,7 +497,7 @@ export function Player({ id, start = null }: { id: string; start?: number | null
         try { media.setActionHandler(action, null); } catch { /* the browser does not know this action */ }
       }
     };
-  }, [item, next, seek, playNext]);
+  }, [item, next, previous, seek, playNext, playPrevious]);
 
   const syncPosition = (el: HTMLVideoElement): void => {
     if (!("mediaSession" in navigator) || !Number.isFinite(el.duration) || el.duration <= 0) return;
@@ -437,6 +545,24 @@ export function Player({ id, start = null }: { id: string; start?: number | null
     }
   }
 
+  // Aligns the picked subtitle to the audio on the server, then plays on with the new "(synced)" track.
+  async function autoSync(): Promise<void> {
+    if (!item || !source || subtitle < 0) return;
+    setSync({ running: true, message: "Matching the subtitles to the audio. This can take a few minutes…" });
+    try {
+      const result: { StreamIndex?: number | null } = await api.syncSubtitle(item.Id, source.Id, subtitle);
+      if (result.StreamIndex == null) {
+        setSync({ running: false, message: "Synced and saved. Reopen the player to pick the synced subtitles." });
+        return;
+      }
+      setSync({ running: false, message: "Synced. Now showing the synced subtitles." });
+      shiftOffset(null);
+      void load(item, position(), audio, result.StreamIndex);
+    } catch (e) {
+      setSync({ running: false, failed: true, message: e instanceof ApiError && e.status === 501 ? "Autosync is not available on this platform." : errorMessage(e) });
+    }
+  }
+
   const nextArt: Art | null = next ? landscape(next, 320) : null;
 
   return (
@@ -446,7 +572,8 @@ export function Player({ id, start = null }: { id: string; start?: number | null
       className={`fixed inset-0 z-40 bg-black text-ink select-none ${visible ? "" : "cursor-none"}`}>
       <h1 className="sr-only">{title ? `Playing ${title}` : "Player"}</h1>
       {/* Direct play carries the token in src: keep "copy video address" out of easy reach. */}
-      <video ref={video} playsInline crossOrigin="anonymous" className="absolute inset-0 h-full w-full touch-manipulation"
+      <video ref={video} playsInline crossOrigin="anonymous" className="player-video absolute inset-0 h-full w-full touch-manipulation"
+        style={{ "--cue-size": CUE_SIZES[cueStyle.size], "--cue-bg": CUE_BACKGROUNDS[cueStyle.background].background, "--cue-shadow": CUE_BACKGROUNDS[cueStyle.background].shadow } as React.CSSProperties}
         controlsList="nodownload" onContextMenu={(e: React.MouseEvent<HTMLVideoElement>) => e.preventDefault()}
         onClick={() => { if (!touch.current) toggle(); }}
         onDoubleClick={() => { if (!touch.current) toggleFullscreen(); }}
@@ -486,9 +613,9 @@ export function Player({ id, start = null }: { id: string; start?: number | null
         onWaiting={() => setWaiting(true)}
         onCanPlay={() => setWaiting(false)}
         onVolumeChange={(e: React.SyntheticEvent<HTMLVideoElement>) => { setVolume(e.currentTarget.volume); setMuted(e.currentTarget.muted); }}
-        onEnded={() => (next && !upNextDismissed ? playNext() : close())}>
+        onEnded={() => (next && !upNextDismissed ? playNext() : setEnded(true))}>
         {textTrack?.DeliveryUrl && (
-          <track key={`${source?.Id}-${textTrack.Index}`} kind="subtitles" default src={url(withToken(textTrack.DeliveryUrl))}
+          <track ref={trackEl} key={trackKey} kind="subtitles" default src={url(withToken(textTrack.DeliveryUrl))}
             srcLang={textTrack.Language ?? undefined} label={streamLabel(textTrack)} />
         )}
       </video>
@@ -536,10 +663,10 @@ export function Player({ id, start = null }: { id: string; start?: number | null
             {nextArt && <img src={nextArt.src} alt="" className="aspect-video w-24 shrink-0 rounded-ctl object-cover sm:w-28" />}
             <div className="min-w-0 flex-1">
               <p className="caption">Up next</p>
-              <p className="line-clamp-2 text-body font-semibold">{episodeCode(next)} · {next.Name}</p>
+              <p className="line-clamp-2 text-body font-semibold">{nextLabel}</p>
               <button type="button" onClick={() => setUpNextDismissed(true)} className="-ml-2 mt-1 h-9 cursor-pointer rounded-pill px-2 text-meta font-medium text-ink-2 hover:bg-fill-2 hover:text-ink">Cancel</button>
             </div>
-            <button type="button" onClick={playNext} aria-label={`Play next episode, starts in ${countdown} seconds`} title="Play next episode"
+            <button type="button" onClick={playNext} aria-label={`Play next, starts in ${countdown} seconds`} title="Play next"
               className="relative grid size-12 shrink-0 cursor-pointer place-items-center rounded-full bg-white text-canvas transition active:scale-95">
               <svg viewBox="0 0 48 48" className="absolute inset-0 size-full -rotate-90" aria-hidden>
                 <circle cx="24" cy="24" r="21" fill="none" stroke="currentColor" strokeOpacity={0.15} strokeWidth="3" />
@@ -573,7 +700,8 @@ export function Player({ id, start = null }: { id: string; start?: number | null
             aria-label="Volume" aria-valuetext={`${Math.round((muted ? 0 : volume) * 100)}%`}
             style={{ "--fill": `${(muted ? 0 : volume) * 100}%` } as React.CSSProperties} />
           <div className="ml-auto flex items-center gap-1 sm:gap-2">
-            {next && <ControlButton icon="skip" label="Next episode" onClick={playNext} />}
+            {previous && <ControlButton icon="previous" label="Previous" onClick={playPrevious} />}
+            {next && <ControlButton icon="skip" label={list ? "Next" : "Next episode"} onClick={playNext} />}
             {hasTracks && <ControlButton icon="subtitles" label="Audio and subtitles" onClick={() => setTracks(!tracks)} expanded={tracks} />}
             <ControlButton icon="keyboard" label="Keyboard shortcuts" onClick={() => setHelp(!help)} expanded={help} className="pointer-coarse:hidden" />
             {pipEnabled && (
@@ -592,6 +720,53 @@ export function Player({ id, start = null }: { id: string; start?: number | null
             options={audioStreams.map((s: MediaStream) => ({ value: s.Index, label: streamLabel(s) }))} />
           <TrackList label="Subtitles" icon="subtitles" value={subtitle} onPick={pickSubtitle}
             options={[{ value: -1, label: "Off" }, ...subtitleStreams.map((s: MediaStream) => ({ value: s.Index, label: `${streamLabel(s)}${s.DeliveryMethod === "Encode" ? " (burned in)" : ""}` }))]} />
+          {subtitle >= 0 && (
+            <div className="space-y-3 border-t border-hair-2 pt-3 sm:col-span-2">
+              {textTrack && (
+                <div role="group" aria-label="Subtitle timing" className="flex flex-wrap items-center gap-1.5">
+                  <span className="caption mr-1 w-full px-2 sm:w-auto">Timing</span>
+                  {OFFSET_STEPS.filter((d: number) => d < 0).map((d: number) => <OffsetButton key={d} delta={d} onClick={() => shiftOffset(d)} />)}
+                  <output aria-live="polite" className="w-20 text-center text-body font-semibold tabular-nums">{offset > 0 ? "+" : ""}{offset.toFixed(1)} s</output>
+                  {OFFSET_STEPS.filter((d: number) => d > 0).map((d: number) => <OffsetButton key={d} delta={d} onClick={() => shiftOffset(d)} />)}
+                  <button type="button" onClick={() => shiftOffset(null)} disabled={offset === 0}
+                    className="h-9 cursor-pointer rounded-pill px-3 text-meta font-medium text-ink-2 hover:bg-fill-2 hover:text-ink disabled:opacity-40">Reset</button>
+                </div>
+              )}
+              {textTrack && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <Segmented label="Subtitle size" value={cueStyle.size} onChange={(size: CueSize) => changeCueStyle({ size })}
+                    options={[{ value: "s", label: "S" }, { value: "m", label: "M" }, { value: "l", label: "L" }, { value: "xl", label: "XL" }]} />
+                  <Segmented label="Subtitle background" value={cueStyle.background} onChange={(background: CueBackground) => changeCueStyle({ background })}
+                    options={[{ value: "none", label: "None" }, { value: "shadow", label: "Shadow" }, { value: "box", label: "Box" }]} />
+                </div>
+              )}
+              {syncable && (
+                <div className="flex flex-wrap items-center gap-3">
+                  <Button size="sm" icon="refresh" loading={!!sync?.running} onClick={() => void autoSync()}>Auto-sync</Button>
+                  <p role="status" className={`min-w-0 flex-1 text-meta ${sync?.failed ? "text-bad" : "text-ink-3"}`}>
+                    {sync?.message ?? "Matches these subtitles to the audio and saves them as a new “(synced)” track."}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {ended && (
+        <div data-chrome role="dialog" aria-label="Finished" className="absolute inset-0 grid place-items-center bg-black/70 p-6">
+          <div className="glass-pop w-[min(440px,calc(100vw-24px))] animate-rise space-y-4 rounded-tile p-5 text-center">
+            <p className="caption">Finished</p>
+            <p className="text-title font-semibold">{title}</p>
+            {subtitleLine && <p className="-mt-3 text-meta text-ink-2">{subtitleLine}</p>}
+            <div className="flex flex-wrap justify-center gap-2">
+              <Button icon="thumbsUp" aria-pressed={!!item?.UserData?.Likes} onClick={() => void toggleUserData("liked")}
+                className={item?.UserData?.Likes ? "!bg-white !text-canvas" : ""}>{item?.UserData?.Likes ? "Liked" : "Like"}</Button>
+              <Button icon="undo" onClick={() => { setEnded(false); seek(0); void video.current?.play().catch((): void => undefined); }}>Play again</Button>
+              {next && <Button variant="primary" icon="play" onClick={playNext}>Play next</Button>}
+              <Button variant="ghost" onClick={close}>Close</Button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -621,6 +796,14 @@ function ControlButton({ icon, glyph, label, onClick, big = false, expanded, cla
       className={`grid shrink-0 cursor-pointer place-items-center rounded-full text-ink transition hover:bg-white/15 active:scale-95 ${big ? "size-12" : "size-11"} ${className}`}>
       {glyph ?? (icon && <Icon name={icon} size={big ? 26 : 22} fill={icon === "play" || icon === "pause" ? "currentColor" : "none"} />)}
     </button>
+  );
+}
+
+function OffsetButton({ delta, onClick }: { delta: number; onClick: () => void }): JSX.Element {
+  const text: string = `${delta > 0 ? "+" : "−"}${Math.abs(delta)} s`;
+  return (
+    <button type="button" onClick={onClick} aria-label={`Subtitles ${delta > 0 ? "later" : "earlier"} by ${Math.abs(delta)} seconds`}
+      className="h-9 min-w-14 cursor-pointer rounded-pill bg-fill-2 px-3 text-meta font-semibold text-ink tabular-nums hover:bg-fill-3">{text}</button>
   );
 }
 

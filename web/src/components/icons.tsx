@@ -1,7 +1,7 @@
 import type { JSX, SVGProps } from "react";
 
 // Lucide-style 24px stroke icons, inlined to avoid an icon dependency for a few dozen glyphs.
-export type IconName = "compass" | "film" | "tv" | "sparkles" | "download" | "globe" | "settings" | "logout" | "search" | "plus" | "check" | "x" | "pause" | "play" | "trash" | "folder" | "up" | "down" | "chevronDown" | "chevronLeft" | "chevronRight" | "star" | "eye" | "eyeOff" | "bolt" | "list" | "sliders" | "users" | "key" | "layers" | "languages" | "subtitles" | "copy" | "alert" | "info" | "clock" | "disk" | "bell" | "ban" | "refresh" | "searchX" | "user" | "upDown" | "home" | "calendar" | "more" | "undo" | "keyboard" | "heart" | "back10" | "forward10" | "skip" | "volume" | "mute" | "maximize" | "minimize" | "music" | "external" | "server" | "scan" | "shield" | "lock";
+export type IconName = "compass" | "film" | "tv" | "sparkles" | "download" | "globe" | "settings" | "logout" | "search" | "plus" | "check" | "x" | "pause" | "play" | "trash" | "folder" | "up" | "down" | "chevronDown" | "chevronLeft" | "chevronRight" | "star" | "eye" | "eyeOff" | "bolt" | "list" | "sliders" | "users" | "key" | "layers" | "languages" | "subtitles" | "copy" | "alert" | "info" | "clock" | "disk" | "bell" | "ban" | "refresh" | "searchX" | "user" | "upDown" | "home" | "calendar" | "more" | "undo" | "keyboard" | "heart" | "back10" | "forward10" | "skip" | "volume" | "mute" | "maximize" | "minimize" | "music" | "external" | "server" | "scan" | "shield" | "lock" | "thumbsUp" | "listPlus" | "shuffle" | "pencil" | "grip" | "share" | "upload" | "previous";
 
 const paths: Readonly<Record<IconName, string>> = {
   compass: "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zM16.2 7.8l-2.1 6.3-6.3 2.1 2.1-6.3z",
@@ -67,6 +67,14 @@ const paths: Readonly<Record<IconName, string>> = {
   server: "M2 3h20v8H2zM2 13h20v8H2zM6 7h.01M6 17h.01",
   scan: "M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 12h10",
   shield: "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z",
+  thumbsUp: "M7 10v12M15 5.9 14 10h5.8a2 2 0 0 1 1.9 2.6l-2.3 8a2 2 0 0 1-1.9 1.4H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.8a2 2 0 0 0 1.8-1.1L12 2a3.1 3.1 0 0 1 3 3.9z",
+  listPlus: "M11 12H3M16 6H3M16 18H3M18 9v6M21 12h-6",
+  shuffle: "M2 18h1.4c1.3 0 2.5-.6 3.3-1.7l6.1-8.6c.7-1.1 2-1.7 3.3-1.7H22M18 2l4 4-4 4M2 6h1.9c1.5 0 2.9.9 3.6 2.2M22 18h-5.9c-1.3 0-2.6-.7-3.3-1.8l-.5-.8M18 14l4 4-4 4",
+  pencil: "M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z",
+  grip: "M9 5h.01M9 12h.01M9 19h.01M15 5h.01M15 12h.01M15 19h.01",
+  share: "M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8M16 6l-4-4-4 4M12 2v13",
+  upload: "M12 15V3M7 8l5-5 5 5M5 21h14",
+  previous: "M19 20 9 12l10-8zM5 19V5",
 };
 
 
